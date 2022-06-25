@@ -43,7 +43,7 @@ public:
     ///Definition of row of the table
     /** Is public allows you tu fill the table */
      struct Def {
-          EnumType val;
+          EnumType value;
           std::string name;
      };
 
@@ -235,7 +235,7 @@ protected:
      std::vector<const Def *> byName;
 
      static bool cmpByVal(const Def &a, const Def &b) {
-          return a.val < b.val;
+          return a.value < b.value;
      }
 
      struct CmpByName {
@@ -388,7 +388,7 @@ inline NamedEnum<EnumType>::NamedEnum(const NamedEnum &other)
 template<typename EnumType>
 inline const std::string& NamedEnum<EnumType>::get(EnumType val) const {
     auto iter = std::lower_bound(byVal.begin(), byVal.end(), Def{val}, cmpByVal);
-    if (iter == byVal.end() || iter->val != val) {
+    if (iter == byVal.end() || iter->value != val) {
         static std::string emptyString;
         return emptyString;
     } else {
@@ -448,7 +448,7 @@ inline const EnumType* NamedEnum<EnumType>::findT(const Q &name) const {
     if (iter == byName.end() || (*iter)->name.compare(name) != 0) {
         return nullptr;
     } else {
-        return &(*iter)->val;
+        return &(*iter)->value;
     }
 }
 

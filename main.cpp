@@ -21,6 +21,16 @@ static NamedEnum_Colors colors_light("light_","");
 static NamedEnum_Colors colors_suffix("","_sufx");
 
 
+class AClass {
+public:
+
+    NAMED_ENUM(Directions, left, right, forward, backward);
+    static NamedEnum_Directions directions;
+
+};
+
+AClass::NamedEnum_Directions AClass::directions;
+
 int main(int argc, char **argv) {
 
     std::cout << "green = " << colors[Colors::green] << std::endl;
@@ -43,6 +53,9 @@ int main(int argc, char **argv) {
         std::cout << "exception " <<  e.what() << std::endl;
     }
 
+    for (const auto &item: AClass::directions) {
+        std::cout << item.name << " = " << static_cast<int>(item.value) << std::endl;
+    }
 
 
 }
