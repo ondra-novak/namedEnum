@@ -1,6 +1,6 @@
 # NamedEnum 
 
-Implements an C++ source interface to create enumertaion values (enums) which can 
+Implements an C++ source interface to create enumertaion values (enums) that can 
 be easily converted to strings and vice versa.
 
 
@@ -108,7 +108,7 @@ green = 2,  // ok
 black = 056, // ok
 red = 0x1F, // ok
 yellow = green + 2, //not supported
-cian = const_a + const_b, //not supported
+cyan = const_a + const_b, //not supported
 brown = 'b', //not supported  
 ```
 
