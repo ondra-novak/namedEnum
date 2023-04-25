@@ -286,7 +286,15 @@ namespace _named_enum_details {
  */
 template<typename UnderlyingEnumType, typename Iter, typename Fn>
 inline constexpr void enumSyntaxParser(Iter iter, Iter end, Fn fn) {
-    char collect[256];
+    //the parser is very simple, it doesn't do any validation, it is expected, that compiler handles validation
+    //so it expects comma separated list
+    //invalid / unexpected characters are ignored
+    //character '=' separes identifier and the value
+    // [0-9]+ for decimal number
+    // 0[0-7]+ for octal number  
+    // 0x[0-9a-fA-F]+ for hexadecimal number 
+
+    char collect[1024]; //GCC-11 doesn't support std::string. Yep, this limits the size of an identifier up to 1024 characters
     int collect_pos = 0;
     UnderlyingEnumType idx = 0;
     std::optional<UnderlyingEnumType> newidx;
@@ -312,7 +320,6 @@ inline constexpr void enumSyntaxParser(Iter iter, Iter end, Fn fn) {
                         } else  if (*iter == '=') {
                             st = number;
                         }                
-                ++iter;
                 break;
             case number: if (*iter == '0') {
                             st = octal; 
@@ -321,13 +328,10 @@ inline constexpr void enumSyntaxParser(Iter iter, Iter end, Fn fn) {
                             st = decimal;
                             newidx = (*iter - '0');
                         }
-                    
-                ++iter;
                 break;
             case decimal: if (*iter >= '0' && *iter <= '9') {
                             newidx = *newidx * 10 + (*iter - '0');
                           }
-                ++iter;
                 break;
             case octal: 
                     if (*iter>='0' && *iter < '8') {
@@ -335,7 +339,6 @@ inline constexpr void enumSyntaxParser(Iter iter, Iter end, Fn fn) {
                     } else if (*iter == 'x') {
                         st = hex;
                     }                
-                ++iter;
                 break;
             case hex: 
                     if (*iter>='0' && *iter <= '9') {
@@ -345,9 +348,9 @@ inline constexpr void enumSyntaxParser(Iter iter, Iter end, Fn fn) {
                     } else if (*iter>='A' && *iter <= 'F') {
                         newidx = *newidx * 16 + (*iter - 'A' + 10);
                     }                 
-                ++iter;
                 break;
         }
+        ++iter;
     }
     if (collect_pos) {
         if (newidx.has_value()) idx = *newidx;
