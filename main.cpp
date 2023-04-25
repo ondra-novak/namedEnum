@@ -1,61 +1,86 @@
-#include <iostream>
 #include "namedEnum.h"
+#include <iostream>
+#include <string_view>
 
-
-NAMED_ENUM(Colors,
-        red=10,
-        green,
-        blue = 5,
-        black = 0x1A,
-        magenta=0x2b,
-        white = 0777,
-        purple,
-        brown,
-        yellow
-        );
-
-
-static NamedEnum_Colors colors;
-static NamedEnum_Colors colors_whole("Colors::","");
-static NamedEnum_Colors colors_light("light_","");
-static NamedEnum_Colors colors_suffix("","_sufx");
-
-
-class AClass {
-public:
-
-    NAMED_ENUM(Directions, left, right, forward, backward);
-    static NamedEnum_Directions directions;
-
+enum class Test {
+    a,b,c=10,d,e
 };
 
-AClass::NamedEnum_Directions AClass::directions;
-
-int main(int argc, char **argv) {
-
-    std::cout << "green = " << colors[Colors::green] << std::endl;
-    std::cout << "white = " << colors[Colors::white] << std::endl;
-    std::cout << "Colors::red= " << colors_whole[Colors::green] << std::endl;
-    std::cout << "Colors::magenta = " << colors_whole[Colors::magenta] << std::endl;
-    std::cout << "light_blue = " << colors_light[Colors::blue] << std::endl;
-    std::cout << "light_purple = " << colors_light[Colors::blue] << std::endl;
-    std::cout << "yellow_sufx = " << colors_suffix[Colors::blue] << std::endl;
-    std::cout << "brown_sufx = " << colors_suffix[Colors::blue] << std::endl;
+struct NonComparableStr {
+    std::string_view s;
+    template<int i>
+    constexpr NonComparableStr(const char (&s)[i]):s(s,i) {}
+    constexpr NonComparableStr() {}
+    constexpr bool operator==(const NonComparableStr &o) const {return s == o.s;}
+};
 
 
-    std::cout << "26 = " << static_cast<int>(colors_light["light_black"]) << std::endl;
-    std::cout << "511 = " << static_cast<int>(colors["white"]) << std::endl;
-    std::cout << "10 = " << static_cast<int>(colors_whole["Colors::red"]) << std::endl;
-    std::cout << "11 = " << static_cast<int>(colors_suffix["green_sufx"]) << std::endl;
-    try {
-        std::cout << "exception = " << static_cast<int>(colors["test"]) << std::endl;
-    } catch (const UnknownEnumException &e) {
-        std::cout << "exception " <<  e.what() << std::endl;
-    }
 
-    for (const auto &item: AClass::directions) {
-        std::cout << item.name << " = " << static_cast<int>(item.value) << std::endl;
-    }
+constexpr auto str = makeNamedEnum<Test,std::string_view>({
+    {Test::a, "a"},
+    {Test::b, "b"},
+    {Test::c, "cc"},
+    {Test::c, "c"},
+    {Test::d, "d"},
+    {Test::e, "e"}
+});
 
 
+consteval int count_comma(const std::string_view x) {
+    int ret = 0;
+    for (const char c: x) ret = ret  + (c == ',');
+    return ret;
 }
+
+template<int> struct TestClass {};
+
+
+consteval auto firstChar2(const std::string_view x) {
+    constexpr int z = count_comma("aabbc,ewy");    
+    return TestClass<z>();    
+}
+
+
+NAMED_ENUM(Test2, 
+            ab,
+            cd,
+            ef,
+            xy=10,
+            zz,
+            ax =  011, 
+            hex = 0xABAB,   
+            hex2   
+    );
+ constexpr NamedEnum_Test2 test2str;
+
+ NAMED_ENUM(Barvy, 
+            cervena,
+            modra,
+            zluta,
+            zelena
+    );
+
+constexpr NamedEnum_Barvy barvy2str;
+
+
+int main() {    
+
+    auto c = str[Test::c];
+    std::cout << c << std::endl;
+
+    bool r = (str["b"] == Test::b);
+    std::cout << r << std::endl;
+
+
+    std::cout <<  test2str[Test2::hex] << std::endl;
+    std::cout <<  test2str[Test2::ef] << std::endl;
+    std::cout <<  test2str[Test2::ab] << std::endl;
+    std::cout <<  test2str[Test2::hex2] << std::endl;
+    std::cout <<  test2str[Test2::zz] << std::endl;
+    
+    std::cout <<  barvy2str[Barvy::cervena] << std::endl;
+    std::cout <<  barvy2str[Barvy::modra] << std::endl;
+    std::cout <<  barvy2str[Barvy::zelena] << std::endl;
+    std::cout <<  barvy2str[Barvy::zluta] << std::endl;
+}
+

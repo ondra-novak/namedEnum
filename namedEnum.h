@@ -1,582 +1,317 @@
 #pragma once
-#include <vector>
-#include <string>
-#include <numeric>
 #include <algorithm>
+#include <optional>
+#include <iterator>
 
-#if __cplusplus >= 201703L
-#include <string_view>
-#endif
-
-
-
-///Defines table of enums with their names
-/**
- * It is expected that this is statically allocated object. You construct
- * this object by passing a table to the constructor. The table has two collums
- * {<enum>,<name>}
- *
- * where <enum> is value of enumeration type and <name> is name of that value
- * (a string representation)
- *
- * @code
- * NamedEnum<int> numbers({
- *  {1,"one"},
- *  {2,"two"},
- *  {3,"three"},
- *  ....
- *
- * }
- *
- * There is no requirement to have recors unique. You can assign multiple names
- * to single enum, and vice verse. However, if there are multiple records
- * for single items to be returned, a random one can be returned.
- *
- *
- * @endcode
- *
- */
-template<typename EnumType>
+template<typename EnumType, typename ValueType, int Count>
 class NamedEnum {
+public:   
 
-public:
-    ///Definition of row of the table
-    /** Is public allows you tu fill the table */
-     struct Def {
-          EnumType value;
-          std::string name;
-     };
+    struct Item {
+        EnumType key;
+        ValueType value;        
+    };
 
-     ///Constructs the NamedEnum instance using the table
-     /**
-      * @param x array containing rows for each enum
-      */
-     template<std::size_t N>
-     explicit NamedEnum(const Def(&x)[N]);
+    using EnumUnderlyingType = std::conditional_t<std::is_enum_v<EnumType>,std::underlying_type_t<EnumType>, EnumType>;
+    constexpr static bool is_incrementable = std::incrementable<EnumType>;
+    constexpr static bool is_ordered = requires{ std::declval<ValueType>() <  std::declval<ValueType>();};
+    union ItemStorage {
+        Item x;
+        constexpr ItemStorage() {}
+        constexpr ~ItemStorage() {}
+        constexpr const Item *operator->() const {return &x;};
+    };
 
-     ///Object can be copied - however, it is not recommended
-     NamedEnum(const NamedEnum &other);
+    constexpr static int count = Count;
 
-     ///Object cannot be assigned
-     NamedEnum &operator=(const NamedEnum &other) = delete;
+    struct ValueIndexArray {
+        int pos[Count] = {};
+    };
 
-    ///Find enum by name
-    /**
-     * @param name name (as std::string)
-     * @return pointer to EnumType or nullptr, if there is no such record
-     */
-    const EnumType *find(const std::string &name) const {
-        return findT(name);
-    }
-#if __cplusplus >= 201703L
+    struct ValueIndexNone {};
 
-    ///Find enum by name
-    /**
-     * @param name name (as string_view)
-     * @return pointer to EnumType or nullptr, if there is no such record
-     */
-    const EnumType *find(const std::string_view &name) const {
-        return findT(name);
-    }
-#endif
-    ///Find enum by name
-    /**
-     * @param name name (const char *)
-     * @return pointer to EnumType or nullptr, if there is no such record
-     */
-    const EnumType *find(const char *name) const {
-        return findT(name);
-    }
-    ///Returns EnumType by string
-    /**
-     * @param name name (as std::string)
-     * @return associated enum value
-     * @exception UnknownEnumException
-     */
-    EnumType get(const std::string &name) const {
-        auto x = find(name);
-        return except(name,x);
-    }
-#if __cplusplus >= 201703L
-    ///Returns EnumType by string
-    /**
-     * @param name name (as string_view)
-     * @return associated enum value
-     * @exception UnknownEnumException
-     */
-    EnumType get(const std::string_view &name) const {
-        auto x = find(name);
-        return except(name,x);
-    }
-#endif
-    ///Returns EnumType by string
-    /**
-     * @param name name (as const char *)
-     * @return associated enum value
-     * @exception UnknownEnumException
-     */
-    EnumType get(const char *name) const {
-        auto x = find(name);
-        return except(name,x);
+    using ValueIndex = std::conditional_t<is_ordered,ValueIndexArray,ValueIndexNone>;
+
+    constexpr NamedEnum(const Item (&items)[Count]) {
+        int order[Count];
+        for (int i = 0; i < Count; i++) {
+            order[i] = i;
+        }
+        std::sort(std::begin(order), std::end(order), [&](int a, int b) {
+            const Item &ia = items[a];
+            const Item &ib = items[b];
+            if (ia.key == ib.key) return a<b;
+            else return ia.key < ib.key;            
+        });        
+        for (int i = 0; i < Count; i++) {
+            std::construct_at(&_items[i].x, items[order[i]]);
+        }
+        initIndex();
     }
 
-    ///Returns EnumType for given name. If not defined, returns default value
-    /**
-     * @param name name (as std::string);
-     * @param def default value in case, that name cannot be resolved
-     * @return associated or default enum
-     */
-    EnumType get(const std::string &name, const EnumType &def) const {
-        auto x = find(name);
-        return x?*x:def;
-    }
-#if __cplusplus >= 201703L
-
-    ///Returns EnumType for given name. If not defined, returns default value
-    /**
-     * @param name name (as std::string_view);
-     * @param def default value in case, that name cannot be resolved
-     * @return associated or default enum
-     */
-    EnumType get(const std::string_view &name, const EnumType &def) const {
-        auto x = find(name);
-        return x?*x:def;
-    }
-#endif
-    ///Returns EnumType for given name. If not defined, returns default value
-    /**
-     * @param name name (as const char *);
-     * @param def default value in case, that name cannot be resolved
-     * @return associated or default enum
-     */
-    EnumType get(const char *name, const EnumType &def) const {
-        auto x = find(name);
-        return x?*x:def;
+    constexpr bool is_sequence() const {
+        if constexpr(is_incrementable || std::is_enum_v<EnumType>) {
+            EnumType itr = _items[0]->key;
+            for (int i = 1; i < Count; i++) {
+                if constexpr(std::is_enum_v<EnumType>) {
+                    itr = static_cast<EnumType>(static_cast<EnumUnderlyingType>(itr)+1);
+                } else {
+                    ++itr;
+                }
+                if (_items[i]->key != itr) return false;
+            } 
+            return true;
+        } else {
+            return false;
+        }        
     }
 
-    ///Returns name of given enum value
-    /**
-     * @param val enum value
-     * @return return associated string with the value, or empty string, if value is unknown
-     */
-    const std::string &get(EnumType val) const;
+    static constexpr ValueType defaultValue = {};
+    static constexpr EnumType defaultEnum = {};
 
-
-    ///Implements array operator
-    /**
-     * @see get()
-     */
-     EnumType operator[](const std::string &name) const {
-         return get(name);
-     }
-#if __cplusplus >= 201703L
-
-    ///Implements array operator
-    /**
-     * @see get()
-     */
-    EnumType operator[](const std::string_view &name) const {
-        return get(name);
-    }
-#endif
-    ///Implements array operator
-    /**
-     * @see get()
-     */
-    EnumType operator[](const char *name) const {
-        return get(name);
+    constexpr const ValueType &get(const EnumType &evalue, const ValueType &defval = defaultValue) const {
+        auto iter = find(evalue);
+        if (iter == end()) return defval;
+        else return iter->value;
     }
 
-    ///Implements array operator
-    /**
-     * @see get()
-     */
-    const std::string &operator[](EnumType val) const;
+    constexpr const EnumType &get(const ValueType &v, const EnumType &defval = defaultEnum) const {
+        auto iter = find(v);
+        if (iter == end()) return defval;
+        else return iter->key;
+    }
 
+    constexpr const ValueType &operator[](const EnumType &evalue) const {return get(evalue);}
+    constexpr const EnumType &operator[](const ValueType &v) const {return get(v);}
+        
 
-    ///Retrieves begin of iteratable container
-    /**
-     * @note order is not preserved
-     */
-     typename std::vector<Def>::const_iterator begin() const {return byVal.begin();}
-    ///Retrieves end of iteratable container
-    /**
-     * @note order is not preserved
-     */
-     typename std::vector<Def>::const_iterator end() const {return byVal.end();}
+    static constexpr int size() {return Count;}
 
-     ///Returns count of definitions
-     std::size_t size() const {return byVal.size();}
+    class Iterator {
+    public:
+        typedef std::ptrdiff_t difference_type;
+        typedef Item value_type;
+        typedef const Item* pointer;
+        typedef const Item& reference;
+        typedef std::random_access_iterator_tag iterator_category;
 
-#if __cplusplus >= 201703L
+        constexpr Iterator(const ItemStorage *ptr):_ptr(ptr) {}
+        constexpr reference operator *() const {return _ptr->x;}
+        constexpr pointer operator->() const {return &_ptr->x;}
+        Iterator &operator++() {++_ptr; return *this;}
+        Iterator &operator--() {--_ptr; return *this;}
+        Iterator &operator+=(ptrdiff_t x) {_ptr+=x; return *this;}
+        Iterator &operator-=(ptrdiff_t x) {_ptr-=x; return *this;}
+        Iterator operator++(int) {auto me = *this; ++_ptr; return me;}
+        Iterator operator--(int) {auto me = *this; --_ptr; return me;}
+        Iterator operator+(ptrdiff_t x) {return Iterator(_ptr+x);}
+        Iterator operator-(ptrdiff_t x) {return Iterator(_ptr-x);}
+        bool operator==(const Iterator &other) const {return _ptr == other._ptr;}
+    protected:
+        const ItemStorage *_ptr;
 
-     ///Converts to string
-     /**
-      * It returns list of enums separated by specified separator
-      *
-      * @param separator
-      */
-     std::string toString(const std::string_view &separator = ", ") const;
-#else
+    };
 
-     std::string toString(const std::string &separator = ", ") const;
-#endif
+    constexpr Iterator begin() const {return Iterator(_items);}
+    constexpr Iterator end() const {return Iterator(_items+Count);}
+    constexpr auto rbegin() const {return std::make_reverse_iterator<Iterator>(end());}
+    constexpr auto rend() const {return std::make_reverse_iterator<Iterator>(begin());}
+
+    constexpr Iterator find(const EnumType &evalue) const {
+        if (_sequence) {
+            if (evalue >= _items[0]->key && evalue <= _items[Count-1]->key) {
+                int offset = static_cast<int>(static_cast<EnumUnderlyingType>(evalue) - static_cast<EnumUnderlyingType>(_items[0]->key));
+                return Iterator(_items+offset);
+            }
+            return end();
+        } else {
+            auto iter = std::lower_bound(std::begin(_items), std::end(_items), evalue, [] <typename A, typename B>(const A &a, const B &b){
+                if constexpr(std::is_same_v<A, EnumType>) {
+                    return a < b->key;
+                } else {
+                    return a->key < b;
+                }
+            });
+            if (iter == std::end(_items) || (*iter)->key != evalue) return end();
+            else return Iterator(iter);
+        }
+    }
+
+    constexpr Iterator find(const ValueType &v) const {
+        if constexpr(is_ordered) {
+            auto iter = std::lower_bound(std::begin(_valueIndex.pos), std::end(_valueIndex.pos), v, [&]<typename A, typename B>(const A &a, const B &b){
+                if constexpr(std::is_same_v<A, ValueType>) {
+                    return a < _items[b]->value;
+                } else {
+                    return _items[a]->value < b;
+                }
+            });
+            if (iter == std::end(_valueIndex.pos) || _items[*iter]->value != v) return end();
+            else return Iterator(&_items[*iter]);
+        } else {
+            auto iter = std::find_if(std::begin(_items), std::end(_items), [&](const ItemStorage &x) {
+                return x->value == v;
+            });
+            if (iter == std::end(_items) || (*iter)->value != v) return end();
+            else return Iterator(iter);
+        }
+    }
 
 protected:
+    ItemStorage _items[Count] = {};
+    bool _sequence;
+    ValueIndex _valueIndex;
 
-     ///protected to avoid empty enums
-     NamedEnum() = default;
+    NamedEnum() = default;
 
-     template<typename Q>
-    const EnumType *findT(const Q &name) const;
-
-
-     std::vector<Def> byVal;
-     std::vector<const Def *> byName;
-
-     static bool cmpByVal(const Def &a, const Def &b) {
-          return a.value < b.value;
-     }
-
-     struct CmpByName {
-         bool operator()(const Def *a, const Def *b) const {
-              return a->name < b->name;
-         }
-        bool operator()(const Def *a, const std::string &b) const {
-            return a->name < b;
+    constexpr void initIndex() {
+        _sequence = is_sequence();
+        if constexpr(is_ordered) {
+            for (int i = 0; i < Count; i++) {
+                _valueIndex.pos[i] = i;
+            }
+            std::sort(std::begin(_valueIndex.pos),std::end(_valueIndex.pos), [&](int a, int b){
+                return _items[a]->value < _items[b]->value;
+            });
         }
-        bool operator()(const std::string &a, const Def *b) {
-            return a < b->name;
-        }
-#if __cplusplus >= 201703L
-        bool operator()(const Def *a, const std::string_view &b) const {
-            return a->name < b;
-        }
-        bool operator()(const std::string_view &a, const Def *b) {
-            return a < b->name;
-        }
-#endif
-        bool operator()(const Def *a, const char *b) const {
-            return a->name.compare(b) < 0;
-        }
-        bool operator()(const char *a, const Def *b) {
-            return b->name.compare(a) < 0;
-        }
-     };
-
-     void updateByName();
-
-     template<typename T>
-    EnumType except(const T &name, const EnumType *findRes) const;
-
+    }
+    
 };
+template<typename EnumType, typename ValueType, int N>
+inline constexpr auto makeNamedEnum(const typename NamedEnum<EnumType, ValueType, N>::Item (&x)[N]) {
+    return NamedEnum<EnumType,ValueType, N>(x);
+}
 
+namespace _named_enum_details {
 
-class UnknownEnumException: public std::exception {
+template<typename UnderlyingEnumType, typename Iter, typename Fn>
+inline constexpr void enumSyntaxParser(Iter iter, Iter end, Fn fn) {
+    char collect[256];
+    int collect_pos = 0;
+    UnderlyingEnumType idx = 0;
+    std::optional<UnderlyingEnumType> newidx;
+    enum State {ident,  number, decimal, octal, hex};
+    State st = ident;
+    while (iter != end) {
+        if (*iter == ',') {
+            if (collect_pos) {
+                if (newidx.has_value()) idx = *newidx;
+                fn(std::string_view(collect, collect_pos), idx);
+                ++idx;
+            }
+            collect_pos =0;
+            newidx.reset();
+            st = ident;
+            ++iter;
+            continue;
+        }
+
+        switch (st) {
+            case ident: if ((*iter>='0' && *iter <='9') || (*iter == '_') || (*iter >= 'a' && *iter <= 'z') || (*iter >= 'A' && *iter <= 'Z')) {
+                            collect[collect_pos++] = *iter;
+                        } else  if (*iter == '=') {
+                            st = number;
+                        }                
+                ++iter;
+                break;
+            case number: if (*iter == '0') {
+                            st = octal; 
+                            newidx = 0;
+                        } else if (*iter > '0' && *iter <= '9') {
+                            st = decimal;
+                            newidx = (*iter - '0');
+                        }
+                    
+                ++iter;
+                break;
+            case decimal: if (*iter >= '0' && *iter <= '9') {
+                            newidx = *newidx * 10 + (*iter - '0');
+                          }
+                ++iter;
+                break;
+            case octal: 
+                    if (*iter>='0' && *iter < '8') {
+                        newidx = *newidx * 8 + (*iter - '0');
+                    } else if (*iter == 'x') {
+                        st = hex;
+                    }                
+                ++iter;
+                break;
+            case hex: 
+                    if (*iter>='0' && *iter <= '9') {
+                        newidx = *newidx * 16 + (*iter - '0');
+                    } else if (*iter>='a' && *iter <= 'f') {
+                        newidx = *newidx * 16 + (*iter - 'a' + 10);
+                    } else if (*iter>='A' && *iter <= 'F') {
+                        newidx = *newidx * 16 + (*iter - 'A' + 10);
+                    }                 
+                ++iter;
+                break;
+        }
+    }
+    if (collect_pos) {
+        if (newidx.has_value()) idx = *newidx;
+        fn(std::string_view(collect, collect_pos), idx);
+    }
+}
+
+template<typename EnumType, auto string_fn>
+inline constexpr int enumCountItems = ([]() {
+    int count = 0;
+    std::string_view text = string_fn();
+    enumSyntaxParser<std::underlying_type_t<EnumType> >(text.begin(), text.end(),[&](auto a, auto b){++count;});
+    return count;
+})();
+
+}
+
+template<typename EnumType, auto string_fn>
+class StringNamedEnum: public NamedEnum<EnumType, std::string_view, _named_enum_details::enumCountItems<EnumType, string_fn> > {
+
 public:
-
-     UnknownEnumException(std::string &&errorEnum, std::string &&allEnums)
-         :errorEnum(std::move(errorEnum))
-         ,allEnums(std::move(allEnums)) {}
+    using Super = NamedEnum<EnumType, std::string_view, _named_enum_details::enumCountItems<EnumType, string_fn> >;
+    using EnumUnderlyingType = typename Super::EnumUnderlyingType;
 
 
-     virtual const char *what() const throw() {
-         if (whatMsg.empty()) {
-             whatMsg =  "Unknown enum: '" + errorEnum + "'. Missing in following list: '" + allEnums + "'";
-         }
-         return whatMsg.c_str();
-     }
+    static constexpr int string_area_size = ([]{
+        int count = 0;
+        std::string_view text = string_fn();
+        _named_enum_details::enumSyntaxParser<std::underlying_type_t<EnumType> >(text.begin(), text.end(),[&](auto a, auto b){ count += a.size()+1;});
+        return count;
+    })();
 
-     const std::string& getErrorEnum() const {
-          return errorEnum;
-     }
+    constexpr StringNamedEnum() {        
+        init_content();
+    }
 
+    constexpr const char *get_string_area() const {return _string_area;}
 
 protected:
-     mutable std::string whatMsg;
-     std::string errorEnum;
-     std::string allEnums;
+    char _string_area[string_area_size];
+
+    constexpr void init_content() {
+        int strpos = 0;
+        int tblpos = 0;
+        std::string_view text = string_fn();
+        _named_enum_details::enumSyntaxParser<std::underlying_type_t<EnumType> >(text.begin(), text.end(),[&](std::string_view text, EnumUnderlyingType idx ){
+            std::copy(text.begin(), text.end(), _string_area+strpos);
+            std::string_view tref(_string_area+strpos, text.size());
+            strpos+=text.size();
+            _string_area[strpos] = 0;
+            ++strpos;
+
+            std::construct_at(&Super::_items[tblpos].x, typename Super::Item{
+                static_cast<EnumType>(idx), tref
+            });
+            ++tblpos;
+        });
+        std::sort(std::begin(Super::_items), std::end(Super::_items), [](const auto &a, const auto &b) {
+            return a->key < b->key;
+        });
+        Super::initIndex();
+    }
 
 };
-
-///Allows to declare enum and prepare table where each enum is mapped to its literal representation
-/**
- * @param Typename Type of enum (must not exist, it will be declared
- * @param ... args Comma separated list of enumerated items, similar to enum declaration. Each item
- * can contain = <index> to reassing index - like real 'enum'. However, only numeric constant
- * is allowed here, expressions are not supported. You also cannot use defined constants and macros
- *
- * Result of this macro is two declarations. The enum itself and the class which
- * is able to convert enum to string and vice versa. The class is extension of NamedEnum;
- *
- * @code
- *
- *   // declare enum Colors
- *   NAMED_ENUM(Colors, red, green, blue=10, yellow=0x23, white=032)
- *   // declare object contains conversion to string
- *   NamedEnumColors strColor;
- *
- * @endcode
- */
 
 #define NAMED_ENUM(Typename, ...) enum class Typename { __VA_ARGS__}; \
-    class NamedEnum_##Typename: public NamedEnumAuto<Typename> {\
-    public: \
-        NamedEnum_##Typename():NamedEnumAuto(#__VA_ARGS__) {} \
-        NamedEnum_##Typename(const char *prefix, const char *suffix):NamedEnumAuto(#__VA_ARGS__, prefix, suffix) {} \
-}
-
-
-
-
-template<typename EnumType>
-class NamedEnumAuto: public NamedEnum<EnumType> {
-
-    using TextIterator = const char *;
-public:
-    NamedEnumAuto(const char *textDef, const char *prefix = "", const char *suffix = "");
-
-private:
-    static int parseToken(TextIterator &x, std::string &buffer);
-    static int parseIndex(TextIterator &x);
-    static int parseIndexHex(TextIterator &x);
-    static int parseIndexOctal(TextIterator &x);
-    static void checkSeparator(TextIterator &x);
-    void addEnum(std::string &buffer, int index, const char *suffix);
-};
-
-class SyntaxtErrorNamedEnumException: public std::exception {
-public:
-    SyntaxtErrorNamedEnumException(const std::string &errorPart):errorPart(errorPart) {}
-
-    void setWholeDef(const std::string &wholeDef) {
-        this->wholeDef = wholeDef;
-    }
-    const char *what() const noexcept {
-        if (msg.empty()) {
-            msg = "NamedEnum: Syntax error at position " + std::to_string(wholeDef.length() - errorPart.length())
-                    + " of definition " + wholeDef;
-        }
-        return msg.c_str();
-    }
-protected:
-    std::string errorPart;
-    std::string wholeDef;
-    mutable std::string msg;
-
-
-};
-
-
-
-
-template<typename EnumType>
-template<std::size_t N>
-inline NamedEnum<EnumType>::NamedEnum(const Def (&x)[N])
-   :byVal(std::begin(x), std::end(x))
-{
-    updateByName();
-}
-
-
-template<typename EnumType>
-inline NamedEnum<EnumType>::NamedEnum(const NamedEnum &other)
-:byVal(other.byVal) {
-    updateByName();
-}
-
-template<typename EnumType>
-inline const std::string& NamedEnum<EnumType>::get(EnumType val) const {
-    auto iter = std::lower_bound(byVal.begin(), byVal.end(), Def{val}, cmpByVal);
-    if (iter == byVal.end() || iter->value != val) {
-        static std::string emptyString;
-        return emptyString;
-    } else {
-        return iter->name;
-    }
-}
-
-template<typename EnumType>
-inline const std::string& NamedEnum<EnumType>::operator [](EnumType val) const {
-    return get(val);
-}
-
-#if __cplusplus >= 201703L
-template<typename EnumType>
-inline std::string NamedEnum<EnumType>::toString(const std::string_view &separator) const {
-#else
-template<typename EnumType>
-inline std::string NamedEnum<EnumType>::toString(const std::string &separator) const {
-#endif
-    std::size_t reqSize = std::accumulate(byName.begin(), byName.end(), 0,
-        [&](std::size_t sz, const Def *p) {return sz+p->name.length();})
-                + separator.size()*byName.size();
-    std::string out;
-    out.reserve(reqSize);
-    auto iter = byName.begin();
-    if (iter != byName.end()) {
-        out.append((*iter)->name);
-        ++iter;
-        while (iter != byName.end()) {
-            out.append(separator);
-            out.append((*iter)->name);
-            ++iter;
-        }
-    }
-    return out;
-
-}
-
-
-template<typename EnumType>
-inline void NamedEnum<EnumType>::updateByName() {
-    std::sort(byVal.begin(), byVal.end(), cmpByVal);
-    byName.reserve(byVal.size());
-    byName.clear();
-    std::transform(byVal.begin(), byVal.end(), std::back_inserter(byName),
-            [&](const Def &def) {
-       return &def;
-    });
-    std::sort(byName.begin(), byName.end(), CmpByName());
-}
-
-
-template<typename EnumType>
-template<typename Q>
-inline const EnumType* NamedEnum<EnumType>::findT(const Q &name) const {
-    auto iter= std::lower_bound(byName.begin(), byName.end(), name, CmpByName());
-    if (iter == byName.end() || (*iter)->name.compare(name) != 0) {
-        return nullptr;
-    } else {
-        return &(*iter)->value;
-    }
-}
-
-
-template<typename EnumType>
-template<typename T>
-inline EnumType NamedEnum<EnumType>::except(const T &name,
-        const EnumType *findRes) const {
-    if (findRes == nullptr) throw UnknownEnumException(std::string(name),toString());
-    return *findRes;
-}
-
-
-template<typename EnumType>
-inline NamedEnumAuto<EnumType>::NamedEnumAuto(const char *textDef, const char *prefix, const char *suffix) {
-    //we need to parse list of enums.
-    /*
-     * enum defintion: text,text, text, text=number, text (number+1)
-     */
-
-    try {
-
-        std::string buffer(prefix);
-        TextIterator x = textDef;
-        int index = 0;
-
-        int a = parseToken(x, buffer);
-        while (a >= 0) {
-            if (a == 1) {
-                index = parseIndex(x);
-            }
-            checkSeparator(x);
-            addEnum(buffer,index, suffix);
-            buffer = prefix;
-            index++;
-            a = parseToken(x, buffer);
-        }
-        if (!buffer.empty()) {
-            addEnum(buffer,index, suffix);
-        }
-    } catch (SyntaxtErrorNamedEnumException &err) {
-        err.setWholeDef(textDef);
-        throw;
-    }
-
-    this->updateByName();
-}
-
-template<typename EnumType>
-inline int NamedEnumAuto<EnumType>::parseToken(TextIterator &x, std::string &buffer)  {
-    while (*x && isspace(*x)) ++x;
-    if (!*x) return -1;
-    while (*x && (isalnum(*x) || *x == '_')) {
-        buffer.push_back(*x);
-        ++x;
-    }
-    if (buffer.empty()) throw SyntaxtErrorNamedEnumException(x);
-    while (*x && isspace(*x)) ++x;
-    if (*x == '=') {
-        ++x;
-        return 1;
-    } else {
-        return 0;
-    }
-}
-
-template<typename EnumType>
-inline int NamedEnumAuto<EnumType>::parseIndex(TextIterator &x) {
-    while (*x && isspace(*x)) ++x;
-    if (*x == '-') {
-        ++x; return -parseIndex(x);
-    } else if (*x == '+') {
-        ++x;
-    }
-    if (*x == '0') {
-        ++x;
-        if (*x == 'x' || *x == 'X') {
-            ++x;
-            return parseIndexHex(x);
-        } else {
-            return parseIndexOctal(x);
-        }
-    } else if (isdigit(*x)) {
-        int index = 0;
-        while (isdigit(*x)) {
-            index = index * 10 + (*x - '0');
-            ++x;
-        }
-        return index;
-    } else throw SyntaxtErrorNamedEnumException(x);
-}
-template<typename EnumType>
-inline int NamedEnumAuto<EnumType>::parseIndexHex(TextIterator &x) {
-        int index = 0;
-        while (isxdigit(*x)) {
-            index = index * 16 + (isdigit(*x)?(*x - '0'):(toupper(*x)-'A'+10));
-            ++x;
-        }
-        return index;
-}
-
-
-
-template<typename EnumType>
-inline int NamedEnumAuto<EnumType>::parseIndexOctal(TextIterator &x) {
-    int index = 0;
-    while (isdigit(*x) && *x < '8') {
-        index = index * 8 + (*x - '0');
-        ++x;
-    }
-    return index;
-
-}
-template<typename EnumType>
-inline void NamedEnumAuto<EnumType>::checkSeparator(TextIterator &x) {
-    while (*x && isspace(*x)) ++x;
-    if (*x && *x != ',') throw SyntaxtErrorNamedEnumException(x);
-    if (*x) ++x;
-}
-
-template<typename EnumType>
-inline void NamedEnumAuto<EnumType>::addEnum(std::string &buffer, int index, const char *suffix) {
-    buffer.append(suffix);
-    this->byVal.push_back({
-        static_cast<EnumType>(index),
-                buffer
-    });
-}
-
-
-
+using NamedEnum_##Typename =  StringNamedEnum<Typename, []{return #__VA_ARGS__;}>;
