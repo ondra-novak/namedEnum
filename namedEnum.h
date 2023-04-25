@@ -3,18 +3,48 @@
 #include <optional>
 #include <iterator>
 
+
+///Construct mapping table for enum to specified value type
+/**
+ * @tparam EnumType type of enum to be mapped. Can be any enum, however it is also possible to use any integral type.
+ * @tparam ValueType type of value mapped to specified enum value
+ * @tparam Count Count of items
+ * 
+ * @note for convience, you can use makeNamedEnum<EnumType,ValueType>({...}) which also fills correct count 
+ * of items.
+*/
 template<typename EnumType, typename ValueType, int Count>
 class NamedEnum {
 public:   
 
+    ///Format of key-value item
+    /**
+     * Defines format of definition {
+     *   {<enum>,<value>},
+     *   {<enum>,<value>},
+     *   ...
+     * }
+    */
     struct Item {
+        ///enum type - key
         EnumType key;
+        ///value type - value
         ValueType value;        
     };
 
+    ///contains underlying enum type, for non-enum type, contains EnumType
     using EnumUnderlyingType = std::conditional_t<std::is_enum_v<EnumType>,std::underlying_type_t<EnumType>, EnumType>;
+    ///Contains true, if EnumType can be incremented (++x exists). For standard enum is false!!!
     constexpr static bool is_incrementable = std::incrementable<EnumType>;
+    ///Contains true, if ValueType can be ordered. For large set of items it is better to support ordering, otherwise fullrow scan is used. 
     constexpr static bool is_ordered = requires{ std::declval<ValueType>() <  std::declval<ValueType>();};
+    
+    ///Declaration of storage 
+    /**
+     * Main reason for this structure is to allow types without default constructor. 
+     * We need unitialized array of items before the constructor body is executed
+     * The constructor does initialization fer item
+     */
     union ItemStorage {
         Item x;
         constexpr ItemStorage() {}
@@ -22,16 +52,25 @@ public:
         constexpr const Item *operator->() const {return &x;};
     };
 
+    ///Contains count of items
     constexpr static int count = Count;
 
+    ///helper class
     struct ValueIndexArray {
         int pos[Count] = {};
     };
 
+    ///helper class
     struct ValueIndexNone {};
 
+    ///Contains type of index structure
     using ValueIndex = std::conditional_t<is_ordered,ValueIndexArray,ValueIndexNone>;
 
+    ///Constructs object from an array of items
+    /**
+     * @param items array of items. Count of items must be exact as declared by Count variable. However
+     * for convience you can use makeNamedEnum()
+    */
     constexpr NamedEnum(const Item (&items)[Count]) {
         int order[Count];
         for (int i = 0; i < Count; i++) {
@@ -49,44 +88,58 @@ public:
         initIndex();
     }
 
-    constexpr bool is_sequence() const {
-        if constexpr(is_incrementable || std::is_enum_v<EnumType>) {
-            EnumType itr = _items[0]->key;
-            for (int i = 1; i < Count; i++) {
-                if constexpr(std::is_enum_v<EnumType>) {
-                    itr = static_cast<EnumType>(static_cast<EnumUnderlyingType>(itr)+1);
-                } else {
-                    ++itr;
-                }
-                if (_items[i]->key != itr) return false;
-            } 
-            return true;
-        } else {
-            return false;
-        }        
+    ///Destructs the object
+    /** Need to non-constexpr object work correctly */
+    constexpr ~NamedEnum() {
+        for (auto &x: _items) {
+            x.x.~Item();
+        }
     }
 
+    ///Contains default value if enum is not registered in the table, you can redefine this in specialization
     static constexpr ValueType defaultValue = {};
+    ///Contains default enum if value is not found in the table, you can redefine this in specialization
     static constexpr EnumType defaultEnum = {};
 
+    /// Get value registered for given enum value
+    /**
+     * @param evalue enum value
+     * @param defval default value in case when enum is not registered
+     * @return found value or default value
+     * 
+     * @note if the underlying value of each registered enum is sequence of numbers 1,2,3,4,5,6, the lookup
+     * has O(1) complexity, otherwise it has O(log n) complexity
+    */
     constexpr const ValueType &get(const EnumType &evalue, const ValueType &defval = defaultValue) const {
         auto iter = find(evalue);
         if (iter == end()) return defval;
         else return iter->value;
     }
 
+    /// Get enum value registered for given value
+    /**
+     * @param v value
+     * @param defval default value
+     * @return found enum or default value
+     * 
+     * @note if the value type is ordered, the lookup has O(log n) complexity otherwise it has O(n) complexity
+    */
     constexpr const EnumType &get(const ValueType &v, const EnumType &defval = defaultEnum) const {
         auto iter = find(v);
         if (iter == end()) return defval;
         else return iter->key;
     }
 
+    ///@see get();
     constexpr const ValueType &operator[](const EnumType &evalue) const {return get(evalue);}
+    ///@see get();
     constexpr const EnumType &operator[](const ValueType &v) const {return get(v);}
         
 
+    ///return count of items
     static constexpr int size() {return Count;}
 
+    ///iterator
     class Iterator {
     public:
         typedef std::ptrdiff_t difference_type;
@@ -112,11 +165,19 @@ public:
 
     };
 
+    ///returns find enum
     constexpr Iterator begin() const {return Iterator(_items);}
+    ///returns last enum
     constexpr Iterator end() const {return Iterator(_items+Count);}
+    
     constexpr auto rbegin() const {return std::make_reverse_iterator<Iterator>(end());}
     constexpr auto rend() const {return std::make_reverse_iterator<Iterator>(begin());}
 
+    ///finds record for given enum value
+    /**
+     * @param evalue value to find
+     * @return returns iterator or end() if not found
+    */
     constexpr Iterator find(const EnumType &evalue) const {
         if (_sequence) {
             if (evalue >= _items[0]->key && evalue <= _items[Count-1]->key) {
@@ -137,6 +198,11 @@ public:
         }
     }
 
+    ///finds record for given  value
+    /**
+     * @param evalue v to find
+     * @return returns iterator or end() if not found
+    */
     constexpr Iterator find(const ValueType &v) const {
         if constexpr(is_ordered) {
             auto iter = std::lower_bound(std::begin(_valueIndex.pos), std::end(_valueIndex.pos), v, [&]<typename A, typename B>(const A &a, const B &b){
@@ -158,8 +224,11 @@ public:
     }
 
 protected:
+    //storage for all items
     ItemStorage _items[Count] = {};
+    //contains true, if registered enum values are sequence of numbers 1,2,3,4,5,6 so index lookup can be used
     bool _sequence;
+    //contains index for search items by value. 
     ValueIndex _valueIndex;
 
     NamedEnum() = default;
@@ -175,8 +244,32 @@ protected:
             });
         }
     }
+    ///
+    constexpr bool is_sequence() const {
+        if constexpr(is_incrementable || std::is_enum_v<EnumType>) {
+            EnumType itr = _items[0]->key;
+            for (int i = 1; i < Count; i++) {
+                if constexpr(std::is_enum_v<EnumType>) {
+                    itr = static_cast<EnumType>(static_cast<EnumUnderlyingType>(itr)+1);
+                } else {
+                    ++itr;
+                }
+                if (_items[i]->key != itr) return false;
+            } 
+            return true;
+        } else {
+            return false;
+        }        
+    }
     
 };
+
+///Create NamedEnum instance
+/**
+ * @tparam EnumType type of enum value
+ * @tparam ValueType type of associated value
+ * @param x array of items key-value pairs - {enum, value}
+*/
 template<typename EnumType, typename ValueType, int N>
 inline constexpr auto makeNamedEnum(const typename NamedEnum<EnumType, ValueType, N>::Item (&x)[N]) {
     return NamedEnum<EnumType,ValueType, N>(x);
@@ -184,6 +277,13 @@ inline constexpr auto makeNamedEnum(const typename NamedEnum<EnumType, ValueType
 
 namespace _named_enum_details {
 
+///Parses content of enum {...} stored in string to correctly register all enum values
+/**
+ * @tparam UnderlyingEnumType - underlying enum type
+ * @param iter begin iterator (char)
+ * @param end end iterator (char)
+ * @param fn function which is called with every key-value pair, contains ("string", UnderlyingEnumType)
+ */
 template<typename UnderlyingEnumType, typename Iter, typename Fn>
 inline constexpr void enumSyntaxParser(Iter iter, Iter end, Fn fn) {
     char collect[256];
@@ -255,6 +355,10 @@ inline constexpr void enumSyntaxParser(Iter iter, Iter end, Fn fn) {
     }
 }
 
+/// Calculates count of items from string
+/** @tparam EnumType enum type
+ * @tparam string_fn - lambda function, which returns stringified enum declaration - need to enforce constexpr of the string 
+ */
 template<typename EnumType, auto string_fn>
 inline constexpr int enumCountItems = ([]() {
     int count = 0;
@@ -265,6 +369,7 @@ inline constexpr int enumCountItems = ([]() {
 
 }
 
+///Class which implements NAMED_ENUM macro
 template<typename EnumType, auto string_fn>
 class StringNamedEnum: public NamedEnum<EnumType, std::string_view, _named_enum_details::enumCountItems<EnumType, string_fn> > {
 
@@ -313,5 +418,31 @@ protected:
 
 };
 
+/**
+ * The macro declares enum Typename with values specified as other arguments, separated by comma. The
+ * declaration mimics standard enum declaration. It is also possible to change assignemnt
+ * values to each enum as long as it is single decimal, octal or hexadecimal constanct
+ * 
+ * @code
+ * NAMED_ENUM(Color, 
+ *     blue,
+ *     green,
+ *     red,
+ *     yellow
+ * )
+ * 
+ * NAMED_ENUM(NType,
+ *      normal,
+ *      decimal = 1,
+ *      octal = 0657,
+ *      hexadecimal = 0xABC123
+ * )
+ * @endcode
+ * 
+ * Along with the declaration of the enum type, the NamedEnum_Typename is also declared, which 
+ * extends NamedEnum class. It automatically registers string value for each enum value. To
+ * use this class, you need to create an instance. It is recommended to declare the instance
+ * as constexpr, because the compiler can generate lookup table during compilation
+ */
 #define NAMED_ENUM(Typename, ...) enum class Typename { __VA_ARGS__}; \
 using NamedEnum_##Typename =  StringNamedEnum<Typename, []{return #__VA_ARGS__;}>;
